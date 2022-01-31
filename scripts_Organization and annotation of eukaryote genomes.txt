@@ -1,0 +1,789 @@
+
+###Scripts for genome annotation 
+#Melina Dändliker
+
+#################################################################################################################################################################
+
+### manual annotation of transposables ###
+
+#################################################################################################################################################################
+
+mk_db_DNA pilon.fasta
+
+# find the length of the contigs
+fastalength pilon.fasta
+
+fetch  contig_116
+
+module add Blast/blast/2.2.26
+TE_find_de_novo_repeats contig_166_genome 500 500 5 > contig_116.txt
+
+# take the contig_116.txt list and sort them and take the 50 windows with the most repeats
+
+
+sort -k 2,2n contig_116.txt |tail -n 50|cut -f 1|head -n 49 > contigs_116_50.txt  
+
+ 
+# save that into a list called contigs_116_50.txt
+# download this file to the computer and use blast from https://github.com/caldetas/blast
+
+python blast.py --f1 contigs_116_50 -p contigs_116_50 
+
+# look for a good place that could have some transposables I have choosen window 4606500
+# go through the contic 116 and look for this window and copy it into a a new file called 
+# contig_116_genome_4606500.fa 
+
+# blast the choosen window against the chosen contig 116
+blast contig_116_genome_4606500.fa
+
+# get the positions of the found repeats within the contig 116 we look for repeats that are
+# 300 bp long and 80% minimal blas ID and 2000 bp up and down stream as flanking size
+blast_repeat_positions contig_116_genome_4606500.fa.blastn 300 80 2000 
+
+# with the positions we can extract the sequence out of the genome 
+assemble_repeats_from_genome contig_116_genome_4606500.fa.blastn.positions contig_116_genome_4606500.fa 
+
+# take one of the sequences and blast them against two different databases to find out what kind of repeat it could be 
+module add Blast/ncbi-blast/2.10.1+
+blastn -query contig_116_genome_4606500_1001 -db /data/courses/assembly-annotation-course/blastdb/nrTREP20 > xxx_rep1_1 
+blastn -query contig_116_genome_4606500_1001 -db /data/courses/assembly-annotation-course/blastdb/Brassicaceae_repbase > xxx_rep2                                              
+
+# put all in one file 
+cat contig_116_genome_4606500_1001 contig_116_genome_4606500.fa_1002 contig_116_genome_4606500.fa_1003  contig_116_genome_4606500.fa_1004 contig_116_genome_4606500.fa_1005 > contig_116_4606500_all 
+
+# download the end file to the computer and look at it with  clustalw
+
+#################################################################################################################################################################
+
+### EDTA ###
+
+#################################################################################################################################################################
+
+###  import the reference genome ###
+
+#!/usr/bin/env bash 
+
+#SBATCH --time=01:00:00
+#SBATCH --mem-per-cpu=1G
+#SBATCH --cpus-per-task=1   
+
+wget -O genome https://www.arabidopsis.org/download_files/Sequences/TAIR10_blastsets/TAIR10_cds_20110103_representative_gene_model_updated            
+
+
+### run the EDTA ###
+
+#!/usr/bin/env bash
+
+#SBATCH --time= 05:00:00
+#SBATCH --mem-per-cpu=10G
+#SBATCH --cpus-per-task=30
+#SBATCH --job-name=edta
+
+cd /data/users/mdaendliker/assembly_annotation_course/EDTA
+PROJDIR=/data 
+  
+singularity exec \     
+--bind $PROJDIR \
+$PROJDIR/courses/assembly-annotation-course/containers2/EDTA_v1.9.6.sif
+EDTA.pl \
+--threads 30 \
+--genome $PROJDIR/users/mdaendliker/assembly_annotation_course/assembly/assembly_Sha/flye/pilon.fasta \
+--step all \
+--species others \
+--cds $PROJDIR/users/mdaendliker/assembly_annotation_course/skripts_2/genome \
+--anno 1 
+
+
+#################################################################################################################################################################
+
+# count the families of transposables that were found 
+grep -c -e ">" pilon.fasta.mod.EDTA.TElib.fa 
+# 861  familes 
+
+# count the intact ones 
+grep -v LTR pilon.fasta.mod.EDTA.intact.gff3 |wc
+# 783  intact ones 
+
+# count the repeat regions 
+grep LTR pilon.fasta.mod.EDTA.intact.gff3|awk '$3=="repeat_region"'|wc -l 
+# 265  repeat regions 
+
+#  prepare the gff3 file for the next step. Step by step 
+grep LTR pilon.fasta.mod.EDTA.intact.gff3| awk '$3~"LTR_retrotransposon"' | wc -l 
+
+grep LTR pilon.fasta.mod.EDTA.intact.gff3| awk '$3~"LTR_retrotransposon"'| sed 's/;Parent.\+Classification=/_/'|sed 's/;Sequence.\+//'|sed 's/\//_/'|sed 's/ID=//'              
+
+grep LTR pilon.fasta.mod.EDTA.intact.gff3| awk '$3~"LTR_retrotransposon"'| sed 's/;Parent.\+Classification=/_/'|sed 's/;Sequence.\+//'|sed 's/\//_/'|sed 's/ID=//'| 
+awk '{print($1, $2, $9, $4, $5, $6, $7, $8)}' > intact_modified.gff3 
+
+grep LTR pilon.fasta.mod.EDTA.intact.gff3| awk '$3~"LTR_retrotransposon"'| sed 's/;Parent.\+Classification=/_/'|sed 's/;Sequence.\+//'|sed 's/\//_/'|sed 's/ID=//'| 
+awk '{print($1, $2, $9, $4, $5, $6, $7, $8)}'| sed 's/ /\t/g' > intact_modified.gff3   
+
+sed 's/_p.\+\tEDTA/_pilon\tEDTA/' intact_modified.gff3 > intact_modified_2.gff3 
+
+#################################################################################################################################################################
+
+
+### run bedTools  to extract sequence ###
+
+#!/usr/bin/env bash
+
+#SBATCH --time=01:00:00
+#SBATCH --mem-per-cpu=4G
+#SBATCH --cpus-per-task=1
+
+
+module add UHTS/Analysis/BEDTools/2.29.2;
+
+bedtools getfasta -fi /data/users/mdaendliker/assembly_annotation_course/assembly/assembly_Sha/flye/pilon.fasta \
+ -bed /data/users/mdaendliker/assembly_annotation_course/EDTA/intact_modified_2.gff3 \
+ -s -nameOnly -fo  /data/users/mdaendliker/assembly_annotation_course/EDTA/intact_modified 
+                                                                                                                                                                                                                                                                                                                                                                                                                                                                                   
+#################################################################################################################################################################
+
+### Dating of TEs / Estimation of insertion age ###
+
+#################################################################################################################################################################
+
+mkdir dating
+cp /data/users/mdaendliker/assembly_annotation_course/EDTA/intact_modified . 
+split_flat intact_modified  
+sed 's/(.\+$//' intact_modified > intact_modified_2 
+split_flat intact_modified_2 
+
+module add Emboss/EMBOSS/6.6.0; 
+LTR LTRRT N 
+date_pair > intact_modified_results.txt
+
+#################################################################################################################################################################
+
+### Phylogenetic approch ###
+
+### prepare the files ###
+
+grep LTR pilon.fasta.mod.EDTA.TEanno.gff3| awk '$3~"LTR_retrotransposon"'| sed 's/;Parent.\+Classification=/_/'|sed 's/;Sequence.\+//'|sed 's/\//_/'|sed 's/ID=//'| awk '{print($1, $2, $9, $4, $5, $6, $7, $8)}'| sed 's/ /\t/g' > LTR_retro_all.gff3 
+sed -i 's/;Name.\+Classification=/_/'  LTR_retro_all.gff3
+
+grep -v LTR pilon.fasta.mod.EDTA.TEanno.gff3 | sed 's/;Parent.\+Classification=/_/'|sed 's/;Sequence.\+//'|sed 's/\//_/'|sed 's/ID=//'| awk '{print($1, $2, $9, $4, $5, $6, $7, $8)} |'sed 's/ /\t/g' > DNA_tranposons_all.gff3  
+sed -i 's/;Name.\+Classification=/_/'  DNA_tranposons_all.gff3  
+
+sed 's/_p.\+\tEDTA/_pilon\tEDTA/' DNA_tranposons_all.gff3 > DNAtranspons_2.gff3  
+sed 's/_p.\+\tEDTA/_pilon\tEDTA/' LTR_retro_all.gff3 > LTR_retro_all_2.gff3
+
+#################################################################################################################################################################
+
+### bedtools for LTR and DNA ###
+
+#!/usr/bin/env bash   
+
+#SBATCH --time=01:00:00   
+#SBATCH --mem-per-cpu=4G  
+#SBATCH --cpus-per-task=1      
+
+module add UHTS/Analysis/BEDTools/2.29.2;      
+
+bedtools getfasta -fi /data/users/mdaendliker/assembly_annotation_course/assembly/assembly_Sha/flye/pilon.fasta \   
+-bed /data/users/mdaendliker/assembly_annotation_course/EDTA/LTR_retro_all_2.gff3 \   
+-s -nameOnly -fo  /data/users/mdaendliker/assembly_annotation_course/EDTA/LTR_retro.fa   
+
+bedtools getfasta -fi /data/users/mdaendliker/assembly_annotation_course/assembly/assembly_Sha/flye/pilon.fasta \    
+-bed /data/users/mdaendliker/assembly_annotation_course/EDTA/DNAtranspons_2.gff3 \  
+-s -nameOnly -fo  /data/users/mdaendliker/assembly_annotation_course/EDTA/DNA_transposons.fa  
+                                                                                                                                                                               
+#################################################################################################################################################################
+
+### prepare files  for TEsorter ###
+
+sed -i 's/(.\+$//' LTR_retro.fa  
+sed -i 's/(.\+$//' DNA_transposons.fa  
+cat DNA_transposons.fa LTR_retro.fa > DNA_LTR.fa  
+
+#################################################################################################################################################################
+
+### TEsorter gives infromation about transposons ####
+
+#!/usr/bin/env bash
+
+#SBATCH --time= 01:00:00
+#SBATCH --mem-per-cpu=4G
+#SBATCH --cpus-per-task=50
+
+PROJDIR=/data 
+  
+singularity exec \     
+--bind $PROJDIR \
+$PROJDIR/courses/assembly-annotation-course/containers2/TEsorter_1.3.0.sif
+TEsorter /data/users/mdaendliker/assembly_annotation_course/EDTA/DNA_LTR.fa  -db rexdb-plant
+
+
+singularity exec \     
+--bind $PROJDIR \
+$PROJDIR/courses/assembly-annotation-course/containers2/TEsorter_1.3.0.sif
+TEsorter $PROJDIR/courses/assembly-annotation-course/CDS_annotation/Brassicaceae_repbase_all_march2019.fasta  -db rexdb-plant
+
+#################################################################################################################################################################
+
+### filter for Gypsy ###
+
+grep -e "Ty3-RT" DNA_LTR.fa.rexdb-plant.dom.gff3 > DNA_LTR_Ty3-RT.fa.rexdb-plant.dom.gff3 
+grep -e "Ty3-RT" Brassicaceae_repbase_all_march2019.fasta.rexdb-plant.dom.gff3 > Ty3_RT_Brassicaceae_repbase_all_march2019.fasta.rexdb-plant.dom.gff3                            
+
+#################################################################################################################################################################
+
+### extract sequence with bedtools ###
+
+#!/usr/bin/env bash   
+
+#SBATCH --time=01:00:00   
+#SBATCH --mem-per-cpu=4G  
+#SBATCH --cpus-per-task=1      
+
+module add UHTS/Analysis/BEDTools/2.29.2;      
+
+bedtools getfasta -fi /data/users/mdaendliker/assembly_annotation_course/EDTA/DNA_LTR.fa  \   
+-bed /data/users/mdaendliker/assembly_annotation_course/EDTA/DNA_LTR_Ty3-RT.fa.rexdb-plant.dom.gff3  \   
+-s -fo  /data/users/mdaendliker/assembly_annotation_course/EDTA/DNA_LTR_Ty3-RT.fa 
+
+bedtools getfasta -fi /data/courses/assembly-annotation-course/CDS_annotation/Brassicaceae_repbase_all_march2019.fasta \    
+-bed /data/users/mdaendliker/assembly_annotation_course/EDTA/Ty3_RT_Brassicaceae_repbase_all_march2019.fasta.rexdb-plant.dom.gff3  \  
+-s -fo  /data/users/mdaendliker/assembly_annotation_course/EDTA/Ty3_RT_Brassicaceae.fa
+
+################################################################################################################################################################
+
+### alignment ###
+
+#!/usr/bin/env bash   
+
+#SBATCH --time=01:00:00   
+#SBATCH --mem-per-cpu=4G  
+#SBATCH --cpus-per-task=1 
+
+
+module add SequenceAnalysis/MultipleSequenceAlignment/clustal-omega/1.2.4
+clustalo -i /data/users/mdaendliker/assembly_annotation_course/EDTA/Ty3_RT_all.fa  -o  /data/users/mdaendliker/assembly_annotation_course/EDTA/Ty3_RT_tree.fasta
+
+#################################################################################################################################################################
+
+### Tree formation ###
+
+#!/usr/bin/env bash   
+
+#SBATCH --time=01:00:00   
+#SBATCH --mem-per-cpu=4G  
+#SBATCH --cpus-per-task=1 
+
+
+module add Phylogeny/FastTree/2.1.10;
+FastTree -nt /data/users/mdaendliker/assembly_annotation_course/EDTA/Ty3_RT_tree.fasta > tree
+
+
+#################################################################################################################################################################
+
+### MAKER ###
+
+#################################################################################################################################################################
+
+#!/usr/bin/env bash
+
+#SBATCH --time= 01:00:00
+#SBATCH --mem-per-cpu=1G
+#SBATCH --cpus-per-task=1
+#SBATCH --job-name=edta
+
+cd /data/users/mdaendliker/assembly_annotation_course/MAKER
+PROJDIR=/data 
+  
+singularity exec \     
+--bind $PROJDIR \
+$PROJDIR/courses/assembly-annotation-course/containers2/MAKER_3.01.03.sif \
+maker -CTL
+
+
+#!/usr/bin/env bash     
+
+#SBATCH --time=3-00:00:00      
+#SBATCH --mem=4G    
+#SBATCH --cpus-per-task=50   
+
+module load SequenceAnalysis/GenePrediction/maker/2.31.9;  
+maker                                                                                                                                                                                                                                                                                                                                                       ~                       
+
+#################################################################################################################################################################
+
+genome=/data/users/mdaendliker/assembly_annotation_course/MAKER/pilon.fasta #genome sequence (fasta file or fasta embeded in GFF3 file) 
+organism_type=eukaryotic #eukaryotic or prokaryotic. Default is eukaryotic  
+
+#-----Re-annotation Using MAKER Derived GFF3    
+maker_gff= #MAKER derived GFF3 file  
+est_pass=0 #use ESTs in maker_gff: 1 = yes, 0 = no    
+altest_pass=0 #use alternate organism ESTs in maker_gff: 1 = yes, 0 = no      
+protein_pass=0 #use protein alignments in maker_gff: 1 = yes, 0 = no      
+rm_pass=0 #use repeats in maker_gff: 1 = yes, 0 = no  
+model_pass=0 #use gene models in maker_gff: 1 = yes, 0 = no 
+pred_pass=0 #use ab-initio predictions in maker_gff: 1 = yes, 0 = no   
+other_pass=0 #passthrough anyything else in maker_gff: 1 = yes, 0 = no         
+
+#-----EST Evidence (for best results provide a file for at least one)    
+est=/data/users/mdaendliker/assembly_annotation_course/assembly/assembly_Sha/Trinity/Trinity_2/Trinity.fasta  #set of ESTs or assembled mRNA-seq in fasta format  
+altest= #EST/cDNA sequence file in fasta format from an alternate organism    
+est_gff= #aligned ESTs or mRNA-seq from an external GFF3 file    
+altest_gff= #aligned ESTs from a closly relate species in GFF3 format         
+
+#-----Protein Homology Evidence (for best results provide a file for at least one)   
+protein=/data/courses/assembly-annotation-course/CDS_annotation/Atal_v10_CDS_proteins  #protein sequence file in fasta format (i.e. from mutiple oransisms)            
+protein_gff=  #aligned protein homology evidence from an external GFF3 file       
+
+#-----Repeat Masking (leave values blank to skip repeat masking)    
+model_org= #select a model organism for RepBase masking in RepeatMasker          
+rmlib=/data/users/mdaendliker/assembly_annotation_course/EDTA/pilon.fasta.mod.EDTA.TElib.fa     
+repeat_protein=/data/courses/assembly-annotation-course/CDS_annotation/PTREP20 #provide a fasta file of transposable element proteins for RepeatRunner 
+rm_gff= #pre-identified repeat elements from an external GFF3 file  
+prok_rm=0 #forces MAKER to repeatmask prokaryotes (no reason to change this), 1 = yes, 0 = no    
+softmask=1 #use soft-masking rather than hard-masking in BLAST (i.e. seg and dust filtering)  
+
+#-----Gene Prediction    
+snaphmm= #SNAP HMM file       
+gmhmm= #GeneMark HMM file   
+augustus_species= #Augustus gene prediction species model     
+fgenesh_par_file= #FGENESH parameter file  
+pred_gff= #ab-initio predictions from an external GFF3 file   
+model_gff= #annotated gene models from an external GFF3 file (annotation pass-through)    
+est2genome=1 #infer gene predictions directly from ESTs, 1 = yes, 0 = no                                                                                                                                                   
+
+#-----Other Annotation Feature Types (features MAKER doesn't recognize)   
+other_gff= #extra features to pass-through to final MAKER generated GFF3 file 
+
+#-----External Application Behavior Options    
+alt_peptide=C #amino acid used to replace non-standard amino acids in BLAST databases          
+cpus=50 #max number of cpus to use in BLAST and RepeatMasker (not for MPI, leave 1 when using MPI)  
+
+#-----MAKER Behavior Options   
+max_dna_len=180000 #length for dividing up contigs into chunks (increases/decreases memory usage) 
+min_contig=1 #skip genome contigs below this length (under 10kb are often useless)    
+pred_flank=200 #flank for extending evidence clusters sent to gene predictors   
+pred_stats=0 #report AED and QI statistics for all predictions as well as models  
+AED_threshold=1 #Maximum Annotation Edit Distance allowed (bound by 0 and 1)  
+min_protein=0 #require at least this many amino acids in predicted proteins  
+alt_splice=0 #Take extra steps to try and find alternative splicing, 1 = yes, 0 = no   
+always_complete=0 #extra steps to force start and stop codons, 1 = yes, 0 = no  
+map_forward=0 #map names and attributes forward from old GFF3 genes, 1 = yes, 0 = no  
+keep_preds=0 #Concordance threshold to add unsupported gene prediction (bound by 0 and 1)  
+split_hit=60000 #length for the splitting of hits (expected max intron size for evidence alignments) 
+single_exon=0 #consider single exon EST evidence when generating annotations, 1 = yes, 0 = no   
+single_length=250 #min length required for single exon ESTs if 'single_exon is enabled'   
+correct_est_fusion=0 #limits use of ESTs in annotation to avoid fusion genes      
+tries=2 #number of times to try a contig if there is a failure for some reason    
+clean_try=0 #remove all data from previous run before retrying, 1 = yes, 0 = no     
+clean_up=0 #removes theVoid directory with individual analysis files, 1 = yes, 0 = no   
+TMP= #specify a directory other than the system default temporary directory for temporary files 
+
+#################################################################################################################################################################
+
+#!/usr/bin/env bash
+
+#SBATCH --time= 01:00:00
+#SBATCH --mem-per-cpu=1G
+#SBATCH --cpus-per-task=1
+
+
+module load SequenceAnalysis/GenePrediction/maker/2.31.9; 
+ 
+gff3_merge -d  /data/users/mdaendliker/assembly_annotation_course/MAKER/pilon.maker.output/pilon_master_datastore_index.log
+fasta_merge -d  /data/users/mdaendliker/assembly_annotation_course/MAKER/pilon.maker.output/pilon_master_datastore_index.log
+
+#################################################################################################################################################################
+
+
+### make data base ###
+
+module add Blast/ncbi-blast/2.10.1+
+makeblastdb -in /data/courses/assembly-annotation-course/CDS_annotation/uniprot-plant_reviewed.fasta -dbtype prot
+
+
+#!/usr/bin/env bash
+
+#SBATCH --time=01:00:00
+#SBATCH --mem-per-cpu=4G
+#SBATCH --cpus-per-task=50
+
+
+module add Blast/ncbi-blast/2.10.1+
+		
+blastp -db /data/courses/assembly-annotation-course/CDS_annotation/uniprot-plant_reviewed.fasta \
+-query /data/users/mdaendliker/assembly_annotation_course/MAKER/pilon.all.maker.proteins.fasta \
+-out /data/users/mdaendliker/assembly_annotation_course/MAKER/blast_output_2
+-evalue 1e-10 -outfmt 6 -num_threads 50
+
+
+##################################################################################################################################################################
+
+#!/usr/bin/env bash
+
+#SBATCH --time=01:00:00
+#SBATCH --mem-per-cpu=4G
+#SBATCH --cpus-per-task=1
+
+cd /data/users/mdaendliker/assembly_annotation_course/MAKER/
+  
+module load SequenceAnalysis/GenePrediction/maker/2.31.9;  
+
+maker_functional_fasta /data/courses/assembly-annotation-course/CDS_annotation/uniprot-plant_reviewed.fasta \
+/data/users/mdaendliker/assembly_annotation_course/MAKER/blast_output_2 \
+/data/users/mdaendliker/assembly_annotation_course/MAKER/pilon.all.maker.proteins.fasta > pilon.all.maker.proteins.fasta.DE
+
+#################################################################################################################################################################
+
+
+#!/usr/bin/env bash
+
+#SBATCH --time=01:00:00
+#SBATCH --mem-per-cpu=1G
+#SBATCH --cpus-per-task=1
+
+
+maker_map_ids --prefix Sha_ /data/users/mdaendliker/assembly_annotation_course/MAKER/pilon.all.gff > /data/users/mdaendliker/assembly_annotation_course/MAKER/genome.all.id.map
+
+#################################################################################################################################################################
+
+#!/usr/bin/env bash
+
+#SBATCH --time=01:00:00
+#SBATCH --mem-per-cpu=1G
+#SBATCH --cpus-per-task=1
+
+module load SequenceAnalysis/GenePrediction/maker/2.31.9;  
+
+map_fasta_ids /data/users/mdaendliker/assembly_annotation_course/MAKER/genome.all.id.map /data/users/mdaendliker/assembly_annotation_course/MAKER/pilon.all.maker.proteins.fasta.DE
+map_gff_ids /data/users/mdaendliker/assembly_annotation_course/MAKER/genome.all.id.map /data/users/mdaendliker/assembly_annotation_course/MAKER/pilon.all.gff
+
+
+#################################################################################################################################################################
+
+### Gene duplication ###
+
+#################################################################################################################################################################
+
+grep -e "mRNA" pilon.all.gff | grep -e "RA" | sed 's/ID\=//'| sed 's/;Parent.\+//' | awk '{print($1, $9, $4, $5)}'| sed 's/ /\t/g' > Sha.gff                                                                                                                                                                                                                   
+awk '{print($2)}' Sha.gff > protein_list 
+
+sed -i 's/,/\-/g' pilon.all.maker.proteins.fasta.DE
+purge_fasta pilon.all.maker.proteins.fasta.DE protein_list >  pilon.all.maker.proteins.RA.fasta
+
+makeblastdb -in /data/users/mdaendliker/assembly_annotation_course/MAKER/pilon.all.maker.proteins.RA.fasta -dbtype prot
+
+
+#!/usr/bin/env bash
+
+#SBATCH --time=01:00:00
+#SBATCH --mem-per-cpu=4G
+#SBATCH --cpus-per-task=50
+
+
+module add Blast/ncbi-blast/2.10.1+
+		
+blastp -db /data/users/mdaendliker/assembly_annotation_course/MAKER/pilon.all.maker.proteins.RA.fasta \
+-query /data/users/mdaendliker/assembly_annotation_course/MAKER/pilon.all.maker.proteins.RA.fasta \
+-out /data/users/mdaendliker/assembly_annotation_course/MAKER/Sha.blast \
+-evalue 1e-10 -outfmt 6 -num_threads 50 -max_target_seqs 5 
+
+
+makeblastdb -in  /data/courses/assembly-annotation-course/CDS_annotation/NNU.pep.fa.ref.single_model -dbtype prot
+
+
+#!/usr/bin/env bash
+
+#SBATCH --time=01:00:00
+#SBATCH --mem-per-cpu=4G
+#SBATCH --cpus-per-task=50
+
+
+module add Blast/ncbi-blast/2.10.1+
+		
+blastp -db /data/courses/assembly-annotation-course/CDS_annotation/NNU.pep.fa.ref.single_model \
+-query /data/users/mdaendliker/assembly_annotation_course/MAKER/pilon.all.maker.proteins.RA.fasta \
+-out /data/users/mdaendliker/assembly_annotation_course/MAKER/Sha_NNU.blast \
+-evalue 1e-10 -outfmt 6 -num_threads 50 -max_target_seqs 5 
+
+
+#################################################################################################################################################################
+
+cat Sha.gff NNU.gff >Sha_NNU.gff
+
+DupGen_finder.pl -i data -t Sha -c NNU -o results
+
+
+#################################################################################################################################################################
+
+### Test for positive selection ###
+
+#!/usr/bin/env bash   
+
+#SBATCH --time=03:00:00     
+#SBATCH --mem-per-cpu=1G   
+#SBATCH --cpus-per-task=1      
+
+cp  /data/courses/assembly-annotation-course/phylogenet_selection/Athaliana_167_cds_primaryTranscriptOnly.fa .    
+
+cd /data/users/mdaendliker/assembly_annotation_course/Trre    
+
+module add Blast/ncbi-blast/2.10.1+     
+
+makeblastdb -in  /data/courses/assembly-annotation-course/phylogenet_selection/Athaliana_167_cds_primaryTranscriptOnly.fa  -dbtype nucl  
+
+#################################################################################################################################################################
+
+### some trouble with the code had to copy the database into my folder ###
+
+cp /data/courses/assembly-annotation-course/phylogenet_selection/Athaliana_167_cds_primaryTranscriptOnly.fa.ndb .
+cp /data/courses/assembly-annotation-course/phylogenet_selection/Athaliana_167_cds_primaryTranscriptOnly.fa.nhr .
+cp /data/courses/assembly-annotation-course/phylogenet_selection/Athaliana_167_cds_primaryTranscriptOnly.fa.nin .
+cp /data/courses/assembly-annotation-course/phylogenet_selection/Athaliana_167_cds_primaryTranscriptOnly.fa.not .
+cp /data/courses/assembly-annotation-course/phylogenet_selection/Athaliana_167_cds_primaryTranscriptOnly.fa.nsq . 
+cp /data/courses/assembly-annotation-course/phylogenet_selection/Athaliana_167_cds_primaryTranscriptOnly.fa.ntf . 
+cp /data/courses/assembly-annotation-course/phylogenet_selection/Athaliana_167_cds_primaryTranscriptOnly.fa.nto . 
+
+
+#################################################################################################################################################################
+
+### balst can now be made works now ###
+
+#!/usr/bin/env bash   
+
+#SBATCH --time=03:00:00     
+#SBATCH --mem-per-cpu=1G   
+#SBATCH --cpus-per-task=1   
+
+
+module add Blast/ncbi-blast/2.10.1+    
+
+cp /data/courses/assembly-annotation-course/phylogenet_selection/phytozome.fas .     
+
+blastn -query /data/users/mdaendliker/assembly_annotation_course/Trre/phytochrome.fas -db /data/users/mdaendliker/assembly_annotation_course/Trre/Athaliana_167_cds_primaryTranscriptOnly.fa \
+-outfmt 6 > blast_results 
+
+perl /data/courses/assembly-annotation-course/phylogenet_selection/extractblast.pl /data/users/mdaendliker/assembly_annotation_course/Trre/Athaliana_167_cds_primaryTranscriptOnly.fa      
+
+#################################################################################################################################################################
+
+cat extracted.fas >> phytochrome.fas
+
+#################################################################################################################################################################
+
+
+#!/usr/bin/env bash   
+
+#SBATCH --time=03:00:00   
+#SBATCH --mem-per-cpu=10G   
+#SBATCH --cpus-per-task=1       
+
+module add SequenceAnalysis/MultipleSequenceAlignment/prank/170427;   
+
+prank -d=/data/users/mdaendliker/assembly_annotation_course/Trre/phytochrome.fas -o=/data/users/mdaendliker/assembly_annotation_course/Trre/phytochrome.fas -f=fasta -codon   
+
+#################################################################################################################################################################
+#!/usr/bin/env bash   
+
+#SBATCH --time=03:00:00     
+#SBATCH --mem-per-cpu=1G   
+#SBATCH --cpus-per-task=1  
+
+
+perl /data/courses/assembly-annotation-course/phylogenet_selection/fastatophylip.pl /data/users/mdaendliker/assembly_annotation_course/Trre/phytochrome.fas.best.fas  
+
+
+#################################################################################################################################################################
+
+
+#!/usr/bin/env bash        
+
+#SBATCH --time=03:00:00   
+#SBATCH --mem-per-cpu=10G       
+#SBATCH --cpus-per-task=1   
+
+module add Phylogeny/raxml/8.2.12  
+
+raxml -s /data/users/mdaendliker/assembly_annotation_course/Trre/phytochrome.fas.best.fas.phy -n phytochrome -m GTRCAT -p 210291 
+
+#################################################################################################################################################################
+
+#!/usr/bin/env bash        
+
+#SBATCH --time=03:00:00   
+#SBATCH --mem-per-cpu=10G       
+#SBATCH --cpus-per-task=1 
+
+
+module add R/3.6.1     
+R     
+library(ape)     
+tree<-read.tree('RAxML_result.phytochrome')     
+tree<-root.phylo(tree,outgroup="Selaginella_161430",resolve.root=T) 
+write.tree(tree,"phytochrome.nwk")       
+q()                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                           
+
+#################################################################################################################################################################
+
+
+mkdir M1a
+
+### codeml.ctl contains ###
+
+seqfile = phytochrome.fas.best.fas.phy * sequence data filename
+     treefile = phytochrome.nwk      * tree structure file name
+      outfile = mlc          * main result file name
+
+        noisy = 9  * 0,1,2,3,9: how much rubbish on the screen
+      verbose = 0  * 0: concise; 1: detailed, 2: too much
+      runmode = 0  * 0: user tree;  1: semi-automatic;  2: automatic
+                   * 3: StepwiseAddition; (4,5):PerturbationNNI; -2: pairwise
+
+      seqtype = 1  * 1:codons; 2:AAs; 3:codons-->AAs
+    CodonFreq = 2  * 0:1/61 each, 1:F1X4, 2:F3X4, 3:codon table
+*        ndata = 1
+        clock = 0  * 0:no clock, 1:clock; 2:local clock; 3:CombinedAnalysis
+       aaDist = 0  * 0:equal, +:geometric; -:linear, 1-6:G1974,Miyata,c,p,v,a
+   aaRatefile = jones.dat  * only used for aa seqs with model=empirical(_F)
+                   * dayhoff.dat, jones.dat, wag.dat, mtmam.dat, or your own
+
+        model = 0
+                   * models for codons:
+                       * 0:one, 1:b, 2:2 or more dN/dS ratios for branches
+                   * models for AAs or codon-translated AAs:
+                       * 0:poisson, 1:proportional, 2:Empirical, 3:Empirical+F
+                       * 6:FromCodon, 7:AAClasses, 8:REVaa_0, 9:REVaa(nr=189)
+
+      NSsites = 1  * 0:one w;1:neutral;2:selection; 3:discrete;4:freqs;
+                   * 5:gamma;6:2gamma;7:beta;8:beta&w;9:beta&gamma;
+                   * 10:beta&gamma+1; 11:beta&normal>1; 12:0&2normal>1;
+                   * 13:3normal>0
+
+        icode = 0  * 0:universal code; 1:mammalian mt; 2-10:see below
+        Mgene = 0
+                   * codon: 0:rates, 1:separate; 2:diff pi, 3:diff kapa, 4:all diff
+                   * AA: 0:rates, 1:separate
+
+    fix_kappa = 0  * 1: kappa fixed, 0: kappa to be estimated
+        kappa = 2  * initial or fixed kappa
+    fix_omega = 0  * 1: omega or omega_1 fixed, 0: estimate 
+        omega = .4 * initial or fixed omega, for codons or codon-based AAs
+
+    fix_alpha = 1  * 0: estimate gamma shape parameter; 1: fix it at alpha
+        alpha = 0. * initial or fixed alpha, 0:infinity (constant rate)
+       Malpha = 0  * different alphas for genes
+        ncatG = 4  * # of categories in dG of NSsites models
+
+        getSE = 0  * 0: don't want them, 1: want S.E.s of estimates
+ RateAncestor = 1  * (0,1,2): rates (alpha>0) or ancestral states (1 or 2)
+
+   Small_Diff = .5e-6
+    cleandata = 1  * remove sites with ambiguity data (1:yes, 0:no)?
+*  fix_blength = -1  * 0: ignore, -1: random, 1: initial, 2: fixed
+        method = 0   * 0: simultaneous; 1: one branch at a time
+
+
+* Genetic codes: 0:universal, 1:mammalian mt., 2:yeast mt., 3:mold mt.,
+* 4: invertebrate mt., 5: ciliate nuclear, 6: echinoderm mt., 
+* 7: euplotid mt., 8: alternative yeast nu. 9: ascidian mt., 
+* 10: blepharisma nu.
+* These codes correspond to transl_table 1 to 11 of GENEBANK.
+
+### put all needed files into folder M1a ###
+
+cp /data/users/mdaendliker/assembly_annotation_course/Trre/phytochrome.nwk .
+cp /data/users/mdaendliker/assembly_annotation_course/Trre/coseml.sh .
+cp /data/users/mdaendliker/assembly_annotation_course/Trre/codeml.ctl .  
+cp /data/users/mdaendliker/assembly_annotation_course/Trre/phytochrome.fas.best.fas.phy  .
+
+
+### coseml.sh contains ###
+
+
+#!/usr/bin/env bash  
+
+#SBATCH --time=03:00:00      
+#SBATCH --mem-per-cpu=10G       
+#SBATCH --cpus-per-task=1      
+
+module add Phylogeny/paml/4.9j     
+codeml                                                                                                                                                                                                                                                                                                                                       
+
+#################################################################################################################################################################
+
+cp -r M1a M2a
+
+### changes in codeml.ctl ###
+
+
+      NSsites = 2  * 0:one w;1:neutral;2:selection; 3:discrete;4:freqs;
+                   * 5:gamma;6:2gamma;7:beta;8:beta&w;9:beta&gamma;
+                   * 10:beta&gamma+1; 11:beta&normal>1; 12:0&2normal>1;
+                   * 13:3normal>0
+
+
+#!/usr/bin/env bash  
+
+#SBATCH --time=03:00:00      
+#SBATCH --mem-per-cpu=10G       
+#SBATCH --cpus-per-task=1      
+
+module add Phylogeny/paml/4.9j     
+codeml                                                                                                                                                                                                                                                                                                                                       
+
+#################################################################################################################################################################
+
+cp -r M1a A1 
+
+### changes in codeml.ctl ###
+
+  model = 2
+                   * models for codons:
+                       * 0:one, 1:b, 2:2 or more dN/dS ratios for branches
+                   * models for AAs or codon-translated AAs:
+                       * 0:poisson, 1:proportional, 2:Empirical, 3:Empirical+F
+                       * 6:FromCodon, 7:AAClasses, 8:REVaa_0, 9:REVaa(nr=189)
+
+      NSsites = 2  * 0:one w;1:neutral;2:selection; 3:discrete;4:freqs;
+                   * 5:gamma;6:2gamma;7:beta;8:beta&w;9:beta&gamma;
+                   * 10:beta&gamma+1; 11:beta&normal>1; 12:0&2normal>1;
+                   * 13:3normal>0
+
+
+
+### phytochrome.nwk contains ###
+
+((((((Acorus_Acora.06G092200.1:0.2743433098,Sorghum_Sobic.001G111500.1:0.4980224455):0.07944753135,((((((AT1G09570.1_19658068:0.0159872845,Alyrata_AL1G20090.t1:0.01947182682):0.01255898864,Capsella_Carub.0001s0891.1:0.0349832224):0.0181469311,(Brassica_Brara.F00612.1:0.07727410527,Brassica_Brara.I05264.1:0.09062795871):0.04803862873):0.09081229446,Cleome_Clevi.0002s0654.2:0.09392770689):0.1372853781,(Populus_Potri.013G000300.2:0.1447781505,(Gossypium_Gohir.D13G178700.1:0.1021401396,Gossypium_Gohir.D11G271900.1:0.07607808417):0.09594573286):0.03412151021):0.06657214524,(Mimulus_MgTOL.B0900.1:0.1894124507,Mimulus_MgTOL.N0982.1:0.2267251956):0.2356114618):0.1245680886):0.1142962763,Amborella_scaffold00045.165:0.3592289055)$1:0.3168777394,((((Cleome_Clevi.0010s1613.1:0.10036898,(Brassica_Brara.E01391.1:0.09644516124,((Alyrata_AL7G44720.t1:0.03063080918,AT5G35840.1_19673064:0.0279718944):0.01888405166,Capsella_Carub.0007s3166.1:0.07492341785):0.02074311325):0.1697981281):0.2861210916,Gossypium_Gohir.D11G156200.1:0.1686454598):0.08044158599,Mimulus_MgTOL.H1282.1:0.4129351873):0.1776625687,Sorghum_Sobic.001G087100.1:0.4214022981):0.1941612597):0.1613021075,((((Brassica_Brara.A00929.1:0.1717248302,((Alyrata_AL7G36310.t1:0.02193929513,AT4G18130.1_19648944:0.02359344763):0.02449637521,Capsella_Carub.0007s2321.1:0.05397002132):0.03479465665):0.1667055325,Cleome_Clevi.0007s0876.1:0.1671404495):0.2569865661,(Mimulus_MgTOL.H1387.1:0.4457907646,Gossypium_Gohir.D10G038800.1:0.2341315552):0.04337636964):0.28897422,(Amborella_scaffold00003.45:0.2459424119,((Acorus_Acora.03G102100.1:0.2433812837,Sorghum_Sobic.001G394400.1:0.3137090626):0.1455197311,(Mimulus_MgTOL.N0038.1:0.2312075735,(((Populus_Potri.008G105200.5:0.0407438315,Populus_Potri.010G145900.2:0.04927845752):0.1155803336,Gossypium_Gohir.D10G179000.1:0.1643893872):0.0561321181,(((Capsella_Carub.0007s2528.1:0.06808299194,(Alyrata_AL7G38810.t1:0.02331101271,AT4G16250.1_19646074:0.03554308984):0.01822695751):0.126570571,(Brassica_Brara.E02473.1:0.09393321061,((Alyrata_AL3G53130.t1:0.01794389634,AT2G18790.1_19641421:0.02157185975):0.02317848688,Capsella_Carub.0003s3305.1:0.03783041545):0.04960592884):0.08307883316):0.03025966011,Cleome_Clevi.0010s0997.1:0.1422217094):0.256901435):0.04246339082):0.06232604947):0.1051685694):0.09408895845):0.2634360702):0,Selaginella_161430:0.3871371755);
+
+
+
+#!/usr/bin/env bash  
+
+#SBATCH --time=06:00:00      
+#SBATCH --mem-per-cpu=10G       
+#SBATCH --cpus-per-task=2      
+
+module add Phylogeny/paml/4.9j     
+codeml                                                                                                                                                                                                                                                                                                                                       
+
+#################################################################################################################################################################
+
+
+cp -r A1 A1b
+
+### changes in codeml.ctl ###
+
+### no changes ###
+
+### phytochrome.nwk contains ###
+
+
+((((((Acorus_Acora.06G092200.1:0.2743433098,Sorghum_Sobic.001G111500.1:0.4980224455):0.07944753135,((((((AT1G09570.1_19658068:0.0159872845,Alyrata_AL1G20090.t1:0.01947182682):0.01255898864,Capsella_Carub.0001s0891.1:0.0349832224):0.0181469311,(Brassica_Brara.F00612.1:0.07727410527,Brassica_Brara.I05264.1:0.09062795871):0.04803862873):0.09081229446,Cleome_Clevi.0002s0654.2:0.09392770689):0.1372853781,(Populus_Potri.013G000300.2:0.1447781505,(Gossypium_Gohir.D13G178700.1:0.1021401396,Gossypium_Gohir.D11G271900.1:0.07607808417):0.09594573286):0.03412151021):0.06657214524,(Mimulus_MgTOL.B0900.1:0.1894124507,Mimulus_MgTOL.N0982.1:0.2267251956):0.2356114618):0.1245680886):0.1142962763,Amborella_scaffold00045.165:0.3592289055)#1:0.3168777394,((((Cleome_Clevi.0010s1613.1:0.10036898,(Brassica_Brara.E01391.1:0.09644516124,((Alyrata_AL7G44720.t1:0.03063080918,AT5G35840.1_19673064:0.0279718944):0.01888405166,Capsella_Carub.0007s3166.1:0.07492341785):0.02074311325):0.1697981281):0.2861210916,Gossypium_Gohir.D11G156200.1:0.1686454598):0.08044158599,Mimulus_MgTOL.H1282.1:0.4129351873):0.1776625687,Sorghum_Sobic.001G087100.1:0.4214022981):0.1941612597):0.1613021075,((((Brassica_Brara.A00929.1:0.1717248302,((Alyrata_AL7G36310.t1:0.02193929513,AT4G18130.1_19648944:0.02359344763):0.02449637521,Capsella_Carub.0007s2321.1:0.05397002132):0.03479465665):0.1667055325,Cleome_Clevi.0007s0876.1:0.1671404495):0.2569865661,(Mimulus_MgTOL.H1387.1:0.4457907646,Gossypium_Gohir.D10G038800.1:0.2341315552):0.04337636964):0.28897422,(Amborella_scaffold00003.45:0.2459424119,((Acorus_Acora.03G102100.1:0.2433812837,Sorghum_Sobic.001G394400.1:0.3137090626):0.1455197311,(Mimulus_MgTOL.N0038.1:0.2312075735,(((Populus_Potri.008G105200.5:0.0407438315,Populus_Potri.010G145900.2:0.04927845752):0.1155803336,Gossypium_Gohir.D10G179000.1:0.1643893872):0.0561321181,(((Capsella_Carub.0007s2528.1:0.06808299194,(Alyrata_AL7G38810.t1:0.02331101271,AT4G16250.1_19646074:0.03554308984):0.01822695751):0.126570571,(Brassica_Brara.E02473.1:0.09393321061,((Alyrata_AL3G53130.t1:0.01794389634,AT2G18790.1_19641421:0.02157185975):0.02317848688,Capsella_Carub.0003s3305.1:0.03783041545):0.04960592884):0.08307883316):0.03025966011,Cleome_Clevi.0010s0997.1:0.1422217094):0.256901435):0.04246339082):0.06232604947):0.1051685694):0.09408895845):0.2634360702):0,Selaginella_161430:0.3871371755);
+
+
+#!/usr/bin/env bash  
+
+#SBATCH --time=06:00:00      
+#SBATCH --mem-per-cpu=10G       
+#SBATCH --cpus-per-task=2      
+
+module add Phylogeny/paml/4.9j     
+codeml        
